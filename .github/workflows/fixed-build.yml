@@ -1,0 +1,91 @@
+name: Fixed Zeroclaw Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    
+    - name: Setup Rust (with specific components)
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: stable
+        components: rust-src, clippy, rustfmt
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          pkg-config \
+          libssl-dev \
+          build-essential \
+          protobuf-compiler \
+          cmake
+    
+    - name: Cache cargo registry
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    
+    - name: Build with verbose output
+      run: |
+        echo "开始构建..."
+        # 先更新cargo
+        cargo update || true
+        
+        # 尝试构建，捕获详细输出
+        set +e
+        cargo build --release --verbose 2>&1 | tee build.log
+        
+        if [ $? -ne 0 ]; then
+          echo "构建失败，查看错误..."
+          grep -i "error:" build.log | head -20
+          grep -i "failed" build.log | head -20
+          echo "完整错误日志已保存到 build.log"
+          exit 1
+        fi
+        
+        echo "✅ 构建成功！"
+    
+    - name: Test binary
+      run: |
+        if [ -f "target/release/zeroclaw" ]; then
+          echo "二进制文件信息:"
+          ls -lh target/release/zeroclaw
+          file target/release/zeroclaw
+          
+          echo "GLIBC依赖检查:"
+          objdump -T target/release/zeroclaw 2>/dev/null | grep GLIBC | head -5 || echo "无法检查GLIBC"
+          
+          echo "测试版本信息:"
+          ./target/release/zeroclaw --version || echo "无法获取版本"
+        else
+          echo "❌ 未找到二进制文件"
+          exit 1
+        fi
+    
+    - name: Create release package
+      run: |
+        mkdir -p release
+        cp target/release/zeroclaw release/
+        strip release/zeroclaw 2>/dev/null || true
+        tar -czf zeroclaw-x86_64-linux-gnu.tar.gz -C release zeroclaw
+        echo "发布包已创建:"
+        ls -lh *.tar.gz
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: zeroclaw-binary
+        path: zeroclaw-x86_64-linux-gnu.tar.gz
