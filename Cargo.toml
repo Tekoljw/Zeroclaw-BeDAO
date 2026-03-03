@@ -22,6 +22,7 @@ categories = ["command-line-utilities", "api-bindings"]
 rust-version = "1.87"
 
 [dependencies]
+hyper-util = "=0.1.19"
 # CLI - minimal and fast
 clap = { version = "4.5", features = ["derive"] }
 clap_complete = "4.5"
@@ -279,3 +280,4 @@ scopeguard = "1.2"
 [[bench]]
 name = "agent_benchmarks"
 harness = false
+
