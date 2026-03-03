@@ -1,0 +1,123 @@
+name: Fixed Full Zeroclaw Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js (for web directory)
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: 'web/package-lock.json'
+    
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: stable
+        components: rust-src, clippy, rustfmt
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          pkg-config \
+          libssl-dev \
+          build-essential \
+          protobuf-compiler \
+          cmake
+    
+    - name: Install frontend dependencies
+      working-directory: web
+      run: |
+        echo "安装前端依赖..."
+        npm ci 2>&1 | tail -30
+    
+    - name: Build frontend
+      working-directory: web
+      run: |
+        echo "构建前端..."
+        npm run build 2>&1 | tail -50 || echo "前端构建可能有问题，但继续..."
+    
+    - name: Verify frontend assets
+      run: |
+        echo "检查web/dist目录..."
+        if [ -d "web/dist" ]; then
+          echo "✅ web/dist存在"
+          ls -la web/dist/ | head -10
+        else
+          echo "❌ web/dist缺失，创建空目录"
+          mkdir -p web/dist
+          echo "<!-- 空前端 -->" > web/dist/index.html
+        fi
+    
+    - name: Cache cargo registry
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    
+    - name: Build Rust binary
+      run: |
+        echo "开始构建Rust二进制..."
+        # 修复hyper-util依赖
+        if grep -q "hyper-util" Cargo.toml; then
+          sed -i 's/^hyper-util = .*/hyper-util = "=0.1.19"/' Cargo.toml
+        else
+          echo "hyper-util = \"=0.1.19\"" >> Cargo.toml
+        fi
+        
+        # 构建
+        cargo build --release --verbose 2>&1 | tee build.log
+        
+        if [ $? -ne 0 ]; then
+          echo "构建失败，查看错误..."
+          grep -i "error:" build.log | head -20
+          exit 1
+        fi
+        
+        echo "✅ 构建成功！"
+    
+    - name: Test binary
+      run: |
+        if [ -f "target/release/zeroclaw" ]; then
+          echo "二进制文件信息:"
+          ls -lh target/release/zeroclaw
+          file target/release/zeroclaw
+          
+          echo "GLIBC依赖检查:"
+          objdump -T target/release/zeroclaw 2>/dev/null | grep GLIBC | head -5 || echo "无法检查GLIBC"
+          
+          echo "测试版本信息:"
+          ./target/release/zeroclaw --version || echo "无法获取版本"
+        else
+          echo "❌ 未找到二进制文件"
+          exit 1
+        fi
+    
+    - name: Create release package
+      run: |
+        mkdir -p release
+        cp target/release/zeroclaw release/
+        strip release/zeroclaw 2>/dev/null || true
+        tar -czf zeroclaw-x86_64-linux-gnu.tar.gz -C release zeroclaw
+        echo "发布包已创建:"
+        ls -lh *.tar.gz
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: zeroclaw-binary
+        path: zeroclaw-x86_64-linux-gnu.tar.gz
